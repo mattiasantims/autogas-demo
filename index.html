@@ -3,7 +3,10 @@
 <head>
   <meta charset="utf-8">
   <title>AutoGas Bridge Demo (Sepolia)</title>
+
+  <!-- ✅ Versione compatibile di Ethers.js -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+
   <style>
     body { font-family: Arial; max-width:800px; margin:40px auto; }
     input, button { padding:8px; margin:6px 0; width:100%; box-sizing:border-box; }
@@ -49,10 +52,13 @@
     }
 
     document.getElementById('connect').onclick = async () => {
-      if(!window.ethereum){ alert("Install MetaMask"); return; }
-      provider = new ethers.BrowserProvider(window.ethereum);
+      if(typeof window.ethereum === "undefined"){
+        alert("🦊 Please install MetaMask to use this demo.");
+        return;
+      }
+      provider = new ethers.providers.Web3Provider(window.ethereum);
       await provider.send("eth_requestAccounts", []);
-      signer = await provider.getSigner();
+      signer = provider.getSigner();
       const addr = await signer.getAddress();
       document.getElementById('status').innerText = "Connected: " + addr;
       log("✅ Connected: " + addr);
@@ -67,7 +73,7 @@
       const shibaAddr = document.getElementById('shibaAddr').value.trim();
       const pepeAddr  = document.getElementById('pepeAddr').value.trim();
       const spender   = document.getElementById('contractAddr').value.trim();
-      const big = ethers.parseUnits("1000000",18);
+      const big = ethers.utils.parseUnits("1000000",18);
       const shiba = new ethers.Contract(shibaAddr, erc20Abi, signer);
       const pepe  = new ethers.Contract(pepeAddr,  erc20Abi, signer);
       log("⏳ Approving SHIBA...");
@@ -92,13 +98,13 @@
       ];
       contract = new ethers.Contract(contractAddr, abi, signer);
       log("⏳ Sending...");
-      const tx = await contract.sendPepeWithAutoGas(to, ethers.parseUnits(amount,18), force);
+      const tx = await contract.sendPepeWithAutoGas(to, ethers.utils.parseUnits(amount,18), force);
       log("Tx sent: " + tx.hash);
       await tx.wait();
       log("✅ Transaction confirmed!");
     };
 
-    // live logs
+    // 🔄 Event poller
     setInterval(async ()=>{
       try{
         if(!contract || !provider) return;
@@ -108,12 +114,12 @@
         if(evs.length){
           log("\n--- Recent Events ---");
           evs.forEach(e=>{
-            if(e.eventName==="BridgeSimulated"){
-              log(`🌉 BridgeSimulated → ${e.args[1]} | ${ethers.formatEther(e.args[2])} ETH`);
-            } else if(e.eventName==="GasSwap"){
-              log(`🔄 GasSwap → used ${ethers.formatUnits(e.args[1],18)} SHIBA`);
-            } else if(e.eventName==="PepeSent"){
-              log(`📤 PepeSent → ${ethers.formatUnits(e.args[2],18)} PEPE to ${e.args[1]}`);
+            if(e.event === "BridgeSimulated"){
+              log(`🌉 BridgeSimulated → ${e.args[1]} | ${ethers.utils.formatEther(e.args[2])} ETH`);
+            } else if(e.event === "GasSwap"){
+              log(`🔄 GasSwap → used ${ethers.utils.formatUnits(e.args[1],18)} SHIBA`);
+            } else if(e.event === "PepeSent"){
+              log(`📤 PepeSent → ${ethers.utils.formatUnits(e.args[2],18)} PEPE to ${e.args[1]}`);
             }
           });
         }
@@ -122,4 +128,3 @@
   </script>
 </body>
 </html>
-
