@@ -1,130 +1,309 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>AutoGas Bridge Demo (Sepolia)</title>
-
-  <!-- ✅ Versione compatibile di Ethers.js -->
+  <meta charset="utf-8" />
+  <title>AutoGas Demo — Simulated Bridge + WBNB→ETH + Compliance</title>
+  <!-- Ethers v5 (UMD) -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-
   <style>
-    body { font-family: Arial; max-width:800px; margin:40px auto; }
-    input, button { padding:8px; margin:6px 0; width:100%; box-sizing:border-box; }
-    .log { background:#111; color:#0f0; padding:10px; min-height:160px; font-family:monospace; white-space:pre-wrap; }
-    label { font-weight:600; margin-top:8px; display:block; }
+    :root { --b:#111; --g:#0f0; --c:#333; }
+    body { font-family: system-ui, Arial; max-width: 1000px; margin: 32px auto; padding: 0 16px; }
+    h1 { margin: 0 0 8px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .row { margin:10px 0 0; }
+    input, button, select { padding:10px; width:100%; box-sizing: border-box; }
+    button{ cursor:pointer; }
+    label{ display:block; font-weight:600; margin:12px 0 6px; }
+    .log { background:var(--b); color:var(--g); padding:12px; min-height:220px; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border-radius:8px; }
+    .pill { background:#eee; border-radius:999px; padding:6px 10px; display:inline-block; margin:2px 6px 0 0; font-size:12px; }
+    .muted{ color:#666; font-size: 12px; }
+    .warn{ color:#b45309; }
+    .ok{ color:#15803d; }
+    .err{ color:#b91c1c; }
+    .card{ border:1px solid #ddd; border-radius:10px; padding:14px; margin:16px 0; }
+    .flex{ display:flex; gap:12px; align-items:center; }
+    .small{ font-size:12px; }
   </style>
 </head>
 <body>
-  <h2>AutoGas Bridge Demo (Sepolia)</h2>
-  <div id="status">Not connected</div>
+  <h1>AutoGas Demo (Sepolia)</h1>
+  <div id="status" class="muted">Not connected</div>
+  <div class="flex">
+    <button id="btnConnect">🔌 Connect MetaMask</button>
+    <button id="btnRefresh">↻ Refresh balances & quote</button>
+    <span id="net" class="pill">Network: -</span>
+    <span id="addr" class="pill">Address: -</span>
+  </div>
 
-  <button id="connect">Connect MetaMask</button>
+  <div class="card">
+    <div class="grid">
+      <div>
+        <label>AutoGas contract</label>
+        <input id="autogas" placeholder="0x AutoGasWithSwapDynamic">
+      </div>
+      <div>
+        <label>MockRouter</label>
+        <input id="router" placeholder="0x MockRouter">
+      </div>
+    </div>
 
-  <label>AutoGasMock contract address</label>
-  <input id="contractAddr" placeholder="0x..." />
+    <div class="grid">
+      <div>
+        <label>SHIBA token</label>
+        <input id="shiba" placeholder="0x SHIBA (not required for this flow)">
+      </div>
+      <div>
+        <label>PEPE token</label>
+        <input id="pepe" placeholder="0x PEPE">
+      </div>
+    </div>
 
-  <label>SHIBA token address</label>
-  <input id="shibaAddr" placeholder="0x..." />
+    <div class="grid">
+      <div>
+        <label>WBNB token</label>
+        <input id="wbnb" placeholder="0x WBNB">
+      </div>
+      <div>
+        <label>Destination (to)</label>
+        <input id="to" placeholder="0x recipient">
+        <div id="toWarn" class="small warn"></div>
+      </div>
+    </div>
 
-  <label>PEPE token address</label>
-  <input id="pepeAddr" placeholder="0x..." />
+    <div class="grid">
+      <div>
+        <label>PEPE amount (whole tokens)</label>
+        <input id="amount" placeholder="e.g. 10">
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="force" checked> Force AutoGas (simulate bridge + exact swap)</label>
+        <div class="small muted">If checked: runs BridgeSimulated + dynamic WBNB→ETH swap for gas.</div>
+      </div>
+    </div>
 
-  <label>Destination address</label>
-  <input id="toAddr" placeholder="0x recipient" />
+    <div class="grid">
+      <div>
+        <button id="btnApprove">✅ Approve WBNB & PEPE (spender = AutoGas)</button>
+      </div>
+      <div>
+        <button id="btnSend">🚀 Send PEPE via AutoGas</button>
+      </div>
+    </div>
+  </div>
 
-  <label>PEPE amount to send (whole tokens)</label>
-  <input id="amount" placeholder="e.g. 10" />
+  <div class="card">
+    <div class="grid">
+      <div>
+        <label>Your balances</label>
+        <div id="balances" class="small">-</div>
+      </div>
+      <div>
+        <label>Quotes</label>
+        <div id="quotes" class="small">-</div>
+      </div>
+    </div>
+  </div>
 
-  <label><input type="checkbox" id="force"> Force AutoGas (simulate no ETH)</label>
+  <div class="card">
+    <label>Event log</label>
+    <div id="log" class="log"></div>
+  </div>
 
-  <button id="approve">Approve SHIBA & PEPE</button>
-  <button id="send">Send PEPE via AutoGas</button>
+<script>
+/** ====== ABIs (minimal) ====== */
+const erc20Abi = [
+  "function approve(address spender,uint256 amount) external returns(bool)",
+  "function balanceOf(address) view returns(uint256)",
+  "function decimals() view returns(uint8)",
+  "function symbol() view returns(string)"
+];
 
-  <div class="log" id="log"></div>
+const routerAbi = [
+  "function ethPerWbnb() view returns (uint256)",
+  "function quoteWBNBforETH(uint256 neededEth) view returns(uint256)",
+  "function swapExactTokensForETH(uint256 wbnbAmount, address to) external",
+];
 
-  <script>
-    let provider, signer, contract;
+const autogasAbi = [
+  "function estimateGasEth() public pure returns (uint256)",
+  "function sendPepeWithAutoGas(address to,uint256 amount,bool forceAutoGas) external",
+  "event ComplianceCheckPassed(address indexed user, address indexed to)",
+  "event BridgeSimulated(address indexed user, string direction, uint256 amountEth)",
+  "event GasSwap(address indexed user, uint256 wbnbUsed, uint256 ethReceived)",
+  "event PepeSent(address indexed user, address indexed to, uint256 amount)"
+];
 
-    function log(msg){
-      const box = document.getElementById('log');
-      box.textContent += msg + "\n";
-      box.scrollTop = box.scrollHeight;
+let provider, signer, user, net, autoGas, router;
+const $ = (id)=>document.getElementById(id);
+const log = (m)=>{ const L=$("log"); L.textContent += m+"\n"; L.scrollTop=L.scrollHeight; };
+
+function fmt(bn,dec=18){ try{ return ethers.utils.formatUnits(bn,dec); }catch(_){ return bn.toString(); } }
+function toWei(v){ return ethers.utils.parseUnits(v, 18); }
+
+/** ====== Connect ====== */
+$("btnConnect").onclick = async () => {
+  if(!window.ethereum){ alert("Install MetaMask"); return; }
+  provider = new ethers.providers.Web3Provider(window.ethereum);
+  await provider.send("eth_requestAccounts",[]);
+  signer = provider.getSigner();
+  user = await signer.getAddress();
+  const n = await provider.getNetwork();
+  net = n.name + " ("+n.chainId+")";
+  $("status").textContent = "Connected";
+  $("addr").textContent = "Address: "+user;
+  $("net").textContent = "Network: "+net;
+  log("✅ Connected "+user+" on "+net);
+  await refreshAll();
+};
+
+$("btnRefresh").onclick = async ()=>{ await refreshAll(); };
+
+async function refreshAll(){
+  if(!signer) return;
+  const autogasAddr = $("autogas").value.trim();
+  const routerAddr  = $("router").value.trim();
+  const pepeAddr    = $("pepe").value.trim();
+  const wbnbAddr    = $("wbnb").value.trim();
+
+  if(autogasAddr && routerAddr){
+    autoGas = new ethers.Contract(autogasAddr, autogasAbi, signer);
+    router  = new ethers.Contract(routerAddr, routerAbi, signer);
+    attachEventPoller();
+  }
+
+  await showBalances(pepeAddr, wbnbAddr);
+  await showQuotes(routerAddr);
+  precheckCompliance();
+}
+
+async function showBalances(pepeAddr, wbnbAddr){
+  try{
+    const out=[];
+    if(pepeAddr){
+      const c = new ethers.Contract(pepeAddr, erc20Abi, signer);
+      const [bal, sym, dec] = await Promise.all([c.balanceOf(user), c.symbol(), c.decimals()]);
+      out.push(`PEPE: ${fmt(bal, dec)} ${sym}`);
     }
+    if(wbnbAddr){
+      const c = new ethers.Contract(wbnbAddr, erc20Abi, signer);
+      const [bal, sym, dec] = await Promise.all([c.balanceOf(user), c.symbol(), c.decimals()]);
+      out.push(`WBNB: ${fmt(bal, dec)} ${sym}`);
+    }
+    const eth = await provider.getBalance(user);
+    out.push(`ETH: ${ethers.utils.formatEther(eth)} ETH`);
+    $("balances").textContent = out.join("  |  ");
+  }catch(e){ $("balances").textContent = "n/a"; }
+}
 
-    document.getElementById('connect').onclick = async () => {
-      if(typeof window.ethereum === "undefined"){
-        alert("🦊 Please install MetaMask to use this demo.");
-        return;
-      }
-      provider = new ethers.providers.Web3Provider(window.ethereum);
-      await provider.send("eth_requestAccounts", []);
-      signer = provider.getSigner();
-      const addr = await signer.getAddress();
-      document.getElementById('status').innerText = "Connected: " + addr;
-      log("✅ Connected: " + addr);
-    };
+async function showQuotes(routerAddr){
+  try{
+    if(!routerAddr){ $("quotes").textContent = "Insert Router address"; return; }
+    const r = new ethers.Contract(routerAddr, routerAbi, signer);
+    // On-chain demo returns constant 0.001 ETH
+    const neededEth = ethers.utils.parseEther("0.001");
+    const rate = await r.ethPerWbnb(); // wei out per 1 WBNB
+    const wbnbNeeded = await r.quoteWBNBforETH(neededEth);
+    $("quotes").innerHTML = [
+      `Needed ETH for gas: 0.001`,
+      `ethPerWBNB: ${ethers.utils.formatEther(rate)} ETH per 1 WBNB`,
+      `WBNB required (exact): ${fmt(wbnbNeeded)}`
+    ].join("  |  ");
+  }catch(e){ $("quotes").textContent = "n/a"; }
+}
 
-    const erc20Abi = [
-      "function approve(address spender,uint256 amount) external returns(bool)"
-    ];
+/** ====== Approvals ====== */
+$("btnApprove").onclick = async ()=>{
+  if(!signer){ return log("⚠️ Connect first"); }
+  const autogasAddr = $("autogas").value.trim();
+  const pepeAddr    = $("pepe").value.trim();
+  const wbnbAddr    = $("wbnb").value.trim();
+  if(!autogasAddr || !pepeAddr || !wbnbAddr) return alert("Insert AutoGas, PEPE, WBNB addresses");
 
-    document.getElementById('approve').onclick = async () => {
-      if(!signer){ log("⚠️ Connect MetaMask first"); return; }
-      const shibaAddr = document.getElementById('shibaAddr').value.trim();
-      const pepeAddr  = document.getElementById('pepeAddr').value.trim();
-      const spender   = document.getElementById('contractAddr').value.trim();
-      const big = ethers.utils.parseUnits("1000000",18);
-      const shiba = new ethers.Contract(shibaAddr, erc20Abi, signer);
-      const pepe  = new ethers.Contract(pepeAddr,  erc20Abi, signer);
-      log("⏳ Approving SHIBA...");
-      await (await shiba.approve(spender,big)).wait();
-      log("✅ SHIBA approved");
-      log("⏳ Approving PEPE...");
-      await (await pepe.approve(spender,big)).wait();
-      log("✅ PEPE approved");
-    };
+  const big = ethers.utils.parseUnits("1000000", 18);
 
-    document.getElementById('send').onclick = async () => {
-      if(!signer){ log("⚠️ Connect MetaMask first"); return; }
-      const contractAddr = document.getElementById('contractAddr').value.trim();
-      const to = document.getElementById('toAddr').value.trim();
-      const amount = document.getElementById('amount').value.trim();
-      const force = document.getElementById('force').checked;
-      const abi = [
-        "function sendPepeWithAutoGas(address to,uint256 amount,bool forceAutoGas) external",
-        "event BridgeSimulated(address indexed user,string direction,uint256 amount)",
-        "event GasSwap(address indexed user,uint256 shibaUsed,uint256 simulatedEth)",
-        "event PepeSent(address indexed user,address indexed to,uint256 amount)"
-      ];
-      contract = new ethers.Contract(contractAddr, abi, signer);
-      log("⏳ Sending...");
-      const tx = await contract.sendPepeWithAutoGas(to, ethers.utils.parseUnits(amount,18), force);
-      log("Tx sent: " + tx.hash);
-      await tx.wait();
-      log("✅ Transaction confirmed!");
-    };
+  const pepe = new ethers.Contract(pepeAddr, erc20Abi, signer);
+  const wbnb = new ethers.Contract(wbnbAddr, erc20Abi, signer);
 
-    // 🔄 Event poller
-    setInterval(async ()=>{
-      try{
-        if(!contract || !provider) return;
-        const latest = await provider.getBlockNumber();
-        const fromBlock = latest - 50;
-        const evs = await contract.queryFilter("*", fromBlock, latest);
-        if(evs.length){
-          log("\n--- Recent Events ---");
-          evs.forEach(e=>{
-            if(e.event === "BridgeSimulated"){
-              log(`🌉 BridgeSimulated → ${e.args[1]} | ${ethers.utils.formatEther(e.args[2])} ETH`);
-            } else if(e.event === "GasSwap"){
-              log(`🔄 GasSwap → used ${ethers.utils.formatUnits(e.args[1],18)} SHIBA`);
-            } else if(e.event === "PepeSent"){
-              log(`📤 PepeSent → ${ethers.utils.formatUnits(e.args[2],18)} PEPE to ${e.args[1]}`);
-            }
-          });
+  log("⏳ Approving WBNB to AutoGas...");
+  await (await wbnb.approve(autogasAddr, big)).wait();
+  log("✅ WBNB approved");
+
+  log("⏳ Approving PEPE to AutoGas...");
+  await (await pepe.approve(autogasAddr, big)).wait();
+  log("✅ PEPE approved");
+};
+
+/** ====== Send ====== */
+$("btnSend").onclick = async ()=>{
+  if(!signer){ return log("⚠️ Connect first"); }
+  const autogasAddr = $("autogas").value.trim();
+  const to = $("to").value.trim();
+  const amount = $("amount").value.trim() || "0";
+  const force = $("force").checked;
+
+  // piccolo pre-check compliance (coerente col mock on-chain)
+  if(isLikelyFlagged(to)){
+    log("⚠️ [Pre-check] Destination looks blocked by mock rule (to % 10 == 0). Choose another 'to'.");
+    // Continuiamo comunque: l'on-chain farà la verifica reale
+  }
+
+  const ag = new ethers.Contract(autogasAddr, autogasAbi, signer);
+  log(`⏳ sendPepeWithAutoGas(to=${to}, amount=${amount}, force=${force})`);
+  const tx = await ag.sendPepeWithAutoGas(to, ethers.utils.parseUnits(amount, 18), force);
+  log("Tx: "+tx.hash);
+  await tx.wait();
+  log("✅ Confirmed");
+  await refreshAll();
+};
+
+/** ====== Events poller (last ~100 blocks) ====== */
+let pollerStarted=false;
+function attachEventPoller(){
+  if(pollerStarted || !autoGas) return;
+  pollerStarted = true;
+  setInterval(async ()=>{
+    try{
+      const latest = await provider.getBlockNumber();
+      const from = Math.max(0, latest - 100);
+      const evs = await autoGas.queryFilter("*", from, latest);
+      if(evs.length){
+        log("\n--- Recent on-chain events ---");
+        for(const e of evs){
+          if(e.event === "BridgeSimulated"){
+            log(`🌉 BridgeSimulated → ${e.args[1]} | need ${ethers.utils.formatEther(e.args[2])} ETH`);
+          }else if(e.event === "GasSwap"){
+            log(`🔄 GasSwap → used ${fmt(e.args[0])} WBNB → got ${ethers.utils.formatEther(e.args[1])} ETH`);
+          }else if(e.event === "ComplianceCheckPassed"){
+            log(`🛡️ ComplianceCheckPassed for ${e.args[1]}`);
+          }else if(e.event === "PepeSent"){
+            log(`📤 PepeSent → ${fmt(e.args[2])} PEPE to ${e.args[1]}`);
+          }else{
+            log(`ℹ️ ${e.event || "Event"} @ ${e.address}`);
+          }
         }
-      }catch(e){}
-    },7000);
-  </script>
+      }
+    }catch(_){}
+  }, 7000);
+}
+
+/** ====== tiny helpers ====== */
+function isLikelyFlagged(to){
+  try{
+    // stessa regola del mock: uint160(to) % 10 == 0 → flagged
+    const bn = ethers.BigNumber.from(to);
+    return bn.mod(10).eq(0);
+  }catch(_){ return false; }
+}
+function precheckCompliance(){
+  const to = $("to").value.trim();
+  const w = $("toWarn");
+  if(!to){ w.textContent=""; return; }
+  w.textContent = isLikelyFlagged(to)
+    ? "⚠️ Mock compliance would BLOCK this 'to' (uint160(to) % 10 == 0)"
+    : "✓ Mock compliance likely OK";
+  w.className = isLikelyFlagged(to) ? "small warn" : "small ok";
+}
+$("to").addEventListener("input", precheckCompliance);
+</script>
 </body>
 </html>
