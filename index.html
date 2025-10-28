@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AutoGas Bridge Demo (Sepolia)</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.0/dist/ethers.min.js"></script>
+  <style>
+    body { font-family: Arial; max-width:800px; margin:40px auto; }
+    input, button { padding:8px; margin:6px 0; width:100%; box-sizing:border-box; }
+    .log { background:#111; color:#0f0; padding:10px; min-height:160px; font-family:monospace; white-space:pre-wrap; }
+    label { font-weight:600; margin-top:8px; display:block; }
+  </style>
+</head>
+<body>
+  <h2>AutoGas Bridge Demo (Sepolia)</h2>
+  <div id="status">Not connected</div>
+
+  <button id="connect">Connect MetaMask</button>
+
+  <label>AutoGasMock contract address</label>
+  <input id="contractAddr" placeholder="0x..." />
+
+  <label>SHIBA token address</label>
+  <input id="shibaAddr" placeholder="0x..." />
+
+  <label>PEPE token address</label>
+  <input id="pepeAddr" placeholder="0x..." />
+
+  <label>Destination address</label>
+  <input id="toAddr" placeholder="0x recipient" />
+
+  <label>PEPE amount to send (whole tokens)</label>
+  <input id="amount" placeholder="e.g. 10" />
+
+  <label><input type="checkbox" id="force"> Force AutoGas (simulate no ETH)</label>
+
+  <button id="approve">Approve SHIBA & PEPE</button>
+  <button id="send">Send PEPE via AutoGas</button>
+
+  <div class="log" id="log"></div>
+
+  <script>
+    let provider, signer, contract;
+
+    function log(msg){
+      const box = document.getElementById('log');
+      box.textContent += msg + "\n";
+      box.scrollTop = box.scrollHeight;
+    }
+
+    document.getElementById('connect').onclick = async () => {
+      if(!window.ethereum){ alert("Install MetaMask"); return; }
+      provider = new ethers.BrowserProvider(window.ethereum);
+      await provider.send("eth_requestAccounts", []);
+      signer = await provider.getSigner();
+      const addr = await signer.getAddress();
+      document.getElementById('status').innerText = "Connected: " + addr;
+      log("✅ Connected: " + addr);
+    };
+
+    const erc20Abi = [
+      "function approve(address spender,uint256 amount) external returns(bool)"
+    ];
+
+    document.getElementById('approve').onclick = async () => {
+      if(!signer){ log("⚠️ Connect MetaMask first"); return; }
+      const shibaAddr = document.getElementById('shibaAddr').value.trim();
+      const pepeAddr  = document.getElementById('pepeAddr').value.trim();
+      const spender   = document.getElementById('contractAddr').value.trim();
+      const big = ethers.parseUnits("1000000",18);
+      const shiba = new ethers.Contract(shibaAddr, erc20Abi, signer);
+      const pepe  = new ethers.Contract(pepeAddr,  erc20Abi, signer);
+      log("⏳ Approving SHIBA...");
+      await (await shiba.approve(spender,big)).wait();
+      log("✅ SHIBA approved");
+      log("⏳ Approving PEPE...");
+      await (await pepe.approve(spender,big)).wait();
+      log("✅ PEPE approved");
+    };
+
+    document.getElementById('send').onclick = async () => {
+      if(!signer){ log("⚠️ Connect MetaMask first"); return; }
+      const contractAddr = document.getElementById('contractAddr').value.trim();
+      const to = document.getElementById('toAddr').value.trim();
+      const amount = document.getElementById('amount').value.trim();
+      const force = document.getElementById('force').checked;
+      const abi = [
+        "function sendPepeWithAutoGas(address to,uint256 amount,bool forceAutoGas) external",
+        "event BridgeSimulated(address indexed user,string direction,uint256 amount)",
+        "event GasSwap(address indexed user,uint256 shibaUsed,uint256 simulatedEth)",
+        "event PepeSent(address indexed user,address indexed to,uint256 amount)"
+      ];
+      contract = new ethers.Contract(contractAddr, abi, signer);
+      log("⏳ Sending...");
+      const tx = await contract.sendPepeWithAutoGas(to, ethers.parseUnits(amount,18), force);
+      log("Tx sent: " + tx.hash);
+      await tx.wait();
+      log("✅ Transaction confirmed!");
+    };
+
+    // live logs
+    setInterval(async ()=>{
+      try{
+        if(!contract || !provider) return;
+        const latest = await provider.getBlockNumber();
+        const fromBlock = latest - 50;
+        const evs = await contract.queryFilter("*", fromBlock, latest);
+        if(evs.length){
+          log("\n--- Recent Events ---");
+          evs.forEach(e=>{
+            if(e.eventName==="BridgeSimulated"){
+              log(`🌉 BridgeSimulated → ${e.args[1]} | ${ethers.formatEther(e.args[2])} ETH`);
+            } else if(e.eventName==="GasSwap"){
+              log(`🔄 GasSwap → used ${ethers.formatUnits(e.args[1],18)} SHIBA`);
+            } else if(e.eventName==="PepeSent"){
+              log(`📤 PepeSent → ${ethers.formatUnits(e.args[2],18)} PEPE to ${e.args[1]}`);
+            }
+          });
+        }
+      }catch(e){}
+    },7000);
+  </script>
+</body>
+</html>
+
